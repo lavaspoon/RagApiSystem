@@ -1,11 +1,11 @@
 package devlava.docai.entity;
 
 import com.fasterxml.jackson.annotation.JsonBackReference;
+import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -15,15 +15,14 @@ import java.util.Set;
 @Setter
 @NoArgsConstructor
 public class Document {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false)
-    private String title;
-
-    @ManyToOne
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "category_id")
+    @JsonBackReference
     private Category category;
 
     private String fileName;
@@ -31,14 +30,19 @@ public class Document {
     private String contentType;
     private long fileSize;
 
-    @Column(columnDefinition = "TEXT")
-    private String content;
-
+    // VectorStore와의 관계 추가
     @OneToMany(mappedBy = "document", cascade = CascadeType.ALL, orphanRemoval = true)
-    private Set<DocumentChunk> chunks = new LinkedHashSet<>();
+    @JsonManagedReference
+    private Set<VectorStore> vectorStores = new LinkedHashSet<>();
 
-    public void addChunk(DocumentChunk chunk) {
-        chunks.add(chunk);
-        chunk.setDocument(this);
+    // 편의 메서드
+    public void addVectorStore(VectorStore vectorStore) {
+        this.vectorStores.add(vectorStore);
+        vectorStore.setDocument(this);
+    }
+
+    public void removeVectorStore(VectorStore vectorStore) {
+        this.vectorStores.remove(vectorStore);
+        vectorStore.setDocument(null);
     }
 }
