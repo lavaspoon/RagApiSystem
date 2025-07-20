@@ -2,7 +2,6 @@ package devlava.docai.service;
 
 import devlava.docai.entity.Category;
 import devlava.docai.entity.Document;
-import devlava.docai.entity.VectorStore;
 import devlava.docai.repository.CategoryRepository;
 import devlava.docai.repository.DocumentRepository;
 import devlava.docai.repository.VectorStoreRepository;
@@ -303,66 +302,4 @@ public class DocumentService {
         documentRepository.deleteById(id);
     }
 
-    // 카테고리별 검색
-    public List<Map<String, Object>> searchInCategory(String query, Long categoryId, int topK) {
-        try {
-            float[] embeddingArray = embeddingModel.embed(query);
-            List<Double> queryEmbedding = new ArrayList<>();
-            for (float f : embeddingArray) {
-                queryEmbedding.add((double) f);
-            }
-            String queryVector = convertEmbeddingToString(queryEmbedding);
-
-            List<VectorStore> results = vectorStoreRepository.findSimilarVectorsByCategory(queryVector, categoryId, topK);
-
-            return results.stream().map(vs -> {
-                Map<String, Object> result = new HashMap<>();
-                result.put("content", vs.getContent());
-                result.put("metadata", vs.getMetadata());
-                result.put("document_id", vs.getDocument().getId());
-                result.put("file_name", vs.getDocument().getFileName());
-                result.put("chunk_index", vs.getChunkIndex());
-                return result;
-            }).collect(Collectors.toList());
-
-        } catch (Exception e) {
-            log.error("Error performing category search", e);
-            return Collections.emptyList();
-        }
-    }
-
-    /**
-     * 단일 문서 내에서 유사도 검색
-     */
-    public List<Map<String, Object>> searchInDocument(String query, Long documentId, int topK) {
-        try {
-            // 문서 존재 여부 확인
-            Document document = getDocument(documentId);
-
-            // 쿼리 임베딩 생성
-            float[] embeddingArray = embeddingModel.embed(query);
-            List<Double> queryEmbedding = new ArrayList<>();
-            for (float f : embeddingArray) {
-                queryEmbedding.add((double) f);
-            }
-            String queryVector = convertEmbeddingToString(queryEmbedding);
-
-            // 특정 문서에서만 유사도 검색 수행
-            List<VectorStore> results = vectorStoreRepository.findSimilarVectorsByDocument(queryVector, documentId, topK);
-
-            return results.stream().map(vs -> {
-                Map<String, Object> result = new HashMap<>();
-                result.put("content", vs.getContent());
-                result.put("metadata", vs.getMetadata());
-                result.put("document_id", vs.getDocument().getId());
-                result.put("file_name", vs.getDocument().getFileName());
-                result.put("chunk_index", vs.getChunkIndex());
-                return result;
-            }).collect(Collectors.toList());
-
-        } catch (Exception e) {
-            log.error("Error performing document search", e);
-            return Collections.emptyList();
-        }
-    }
 }
