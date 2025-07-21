@@ -40,24 +40,22 @@ public class SearchService {
                         return "죄송합니다. 해당 카테고리에서 관련된 정보를 찾을 수 없습니다.";
                     }
 
-                    // 2. 컨텍스트 구성
-                    String context = buildContext(similarChunks);
+                    // 2. 컨텍스트 구성 (간단하게)
+                    String context = buildSimpleContext(similarChunks);
 
                     // 3. 프롬프트 생성
                     return String.format("""
-                        다음 문서들의 정보를 바탕으로 사용자의 질문에 답변해주세요.
+                        다음 문서 내용을 바탕으로 질문에 답변해주세요.
                         
                         질문: %s
                         
-                        관련 문서 정보:
+                        관련 내용:
                         %s
                         
                         답변 지침:
-                        1. 제공된 문서 정보만을 기반으로 답변하세요
-                        2. 문서에 없는 정보는 추측하지 마세요
-                        3. 답변할 수 없는 경우 명확히 표현하세요
-                        4. 가능한 한 구체적이고 정확한 답변을 제공하세요
-                        5. 여러 문서에서 정보를 찾은 경우, 이를 종합해서 답변하세요
+                        - 제공된 정보만을 기반으로 답변하세요
+                        - 간결하고 명확하게 답변하세요
+                        - 문서에 없는 정보는 추측하지 마세요
                         
                         답변:
                         """, query, context);
@@ -86,12 +84,12 @@ public class SearchService {
                         return "죄송합니다. 해당 문서에서 관련된 정보를 찾을 수 없습니다.";
                     }
 
-                    // 2. 컨텍스트 구성
-                    String context = buildContext(similarChunks);
+                    // 2. 컨텍스트 구성 (간단하게)
+                    String context = buildSimpleContext(similarChunks);
 
                     // 3. 프롬프트 생성 (문서 특화)
                     return String.format("""
-                        '%s' 문서의 내용을 바탕으로 사용자의 질문에 답변해주세요.
+                        '%s' 문서의 내용을 바탕으로 질문에 답변해주세요.
                         
                         질문: %s
                         
@@ -99,10 +97,9 @@ public class SearchService {
                         %s
                         
                         답변 지침:
-                        1. 해당 문서의 내용만을 기반으로 답변하세요
-                        2. 문서에 없는 정보는 추측하지 마세요
-                        3. 답변할 수 없는 경우 명확히 표현하세요
-                        4. 가능한 한 구체적이고 정확한 답변을 제공하세요
+                        - 해당 문서의 내용만을 기반으로 답변하세요
+                        - 간결하고 명확하게 답변하세요
+                        - 문서에 없는 정보는 추측하지 마세요
                         
                         답변:
                         """, document.getFileName(), query, context);
@@ -119,7 +116,6 @@ public class SearchService {
      */
     private Flux<String> generateAnswerStream(String prompt) {
         try {
-            // OllamaChatModel의 stream 메서드 사용
             return chatModel.stream(prompt);
         } catch (Exception e) {
             log.error("Error generating stream answer", e);
@@ -127,7 +123,7 @@ public class SearchService {
         }
     }
 
-    // 기존 메서드들 유지 (비 스트림 방식)
+    // 간단한 응답 형태로 수정된 메서드들
     public SearchResponse answerQuestionInCategory(String query, Long categoryId, int topK) {
         try {
             log.info("Answering question in category {}: {}", categoryId, query);
@@ -138,22 +134,35 @@ public class SearchService {
                 return SearchResponse.builder()
                         .query(query)
                         .answer("죄송합니다. 해당 카테고리에서 관련된 정보를 찾을 수 없습니다.")
-                        .sources(Collections.emptyList())
-                        .confidence(0.0)
+                        .documentName("정보 없음")
+                        .confidence(0)
+                        .downloadUrl(null)
                         .build();
             }
 
-            String context = buildContext(similarChunks);
-            String answer = generateAnswer(query, context);
-            List<SourceInfo> sources = buildSourceInfo(similarChunks);
-            double confidence = calculateConfidence(similarChunks, answer);
+            String context = buildSimpleContext(similarChunks);
+            String answer = generateSimpleAnswer(query, context);
+            String documentName = getBestMatchingDocumentName(similarChunks, query);
+            int confidence = calculateSimpleConfidence(similarChunks, answer);
+
+            // 🆕 주요 참조 문서 정보 추가
+            Document mainDocument = getMainDocument(similarChunks, query);
+
+            // 로그 추가 - 디버깅용
+            log.info("Found {} chunks from documents: {}",
+                    similarChunks.size(),
+                    similarChunks.stream()
+                            .map(chunk -> (String) chunk.get("file_name"))
+                            .distinct()
+                            .collect(Collectors.joining(", ")));
+            log.info("Selected main document: {}", documentName);
 
             return SearchResponse.builder()
                     .query(query)
                     .answer(answer)
-                    .sources(sources)
+                    .documentName(documentName)
                     .confidence(confidence)
-                    .totalChunks(similarChunks.size())
+                    .downloadUrl(mainDocument != null ? "http://localhost:8050/api/documents/download/" + mainDocument.getId() : null)
                     .build();
 
         } catch (Exception e) {
@@ -161,8 +170,9 @@ public class SearchService {
             return SearchResponse.builder()
                     .query(query)
                     .answer("답변 생성 중 오류가 발생했습니다.")
-                    .sources(Collections.emptyList())
-                    .confidence(0.0)
+                    .documentName("오류")
+                    .confidence(0)
+                    .downloadUrl(null)
                     .build();
         }
     }
@@ -178,23 +188,22 @@ public class SearchService {
                 return SearchResponse.builder()
                         .query(query)
                         .answer("죄송합니다. 해당 문서에서 관련된 정보를 찾을 수 없습니다.")
-                        .sources(Collections.emptyList())
-                        .confidence(0.0)
+                        .documentName(document.getFileName())
+                        .confidence(0)
+                        .downloadUrl("http://localhost:8050/api/documents/download/" + document.getId())
                         .build();
             }
 
-            String context = buildContext(similarChunks);
-            String answer = generateAnswerForDocument(query, context, document.getFileName());
-            List<SourceInfo> sources = buildSourceInfo(similarChunks);
-            double confidence = calculateConfidence(similarChunks, answer);
+            String context = buildSimpleContext(similarChunks);
+            String answer = generateSimpleAnswerForDocument(query, context, document.getFileName());
+            int confidence = calculateSimpleConfidence(similarChunks, answer);
 
             return SearchResponse.builder()
                     .query(query)
                     .answer(answer)
-                    .sources(sources)
-                    .confidence(confidence)
-                    .totalChunks(similarChunks.size())
                     .documentName(document.getFileName())
+                    .confidence(confidence)
+                    .downloadUrl("http://localhost:8050/api/documents/download/" + document.getId())
                     .build();
 
         } catch (Exception e) {
@@ -202,13 +211,14 @@ public class SearchService {
             return SearchResponse.builder()
                     .query(query)
                     .answer("답변 생성 중 오류가 발생했습니다.")
-                    .sources(Collections.emptyList())
-                    .confidence(0.0)
+                    .documentName("오류")
+                    .confidence(0)
+                    .downloadUrl(null)
                     .build();
         }
     }
 
-    // 나머지 기존 메서드들은 동일하게 유지
+    // 유사도 기반 검색 메서드들 - 순서가 중요함!
     public List<Map<String, Object>> searchSimilarChunksInCategory(String query, Long categoryId, int topK) {
         try {
             float[] embeddingArray = embeddingModel.embed(query);
@@ -218,6 +228,7 @@ public class SearchService {
             }
             String queryVector = convertEmbeddingToString(queryEmbedding);
 
+            // 유사도 순으로 정렬된 결과를 반환 (가장 유사한 것이 첫 번째)
             List<VectorStore> results = vectorStoreRepository.findSimilarVectorsByCategory(queryVector, categoryId, topK);
 
             return results.stream().map(this::mapVectorStoreToResult).collect(Collectors.toList());
@@ -247,34 +258,28 @@ public class SearchService {
         }
     }
 
-    private String buildContext(List<Map<String, Object>> chunks) {
-        StringBuilder context = new StringBuilder();
+    // 새로운 헬퍼 메서드들 - 간단한 응답 생성용
 
-        for (int i = 0; i < chunks.size(); i++) {
-            Map<String, Object> chunk = chunks.get(i);
-            context.append("문서 ").append(i + 1).append(":\n");
-            context.append("파일명: ").append(chunk.get("file_name")).append("\n");
-            context.append("내용: ").append(chunk.get("content")).append("\n\n");
-        }
-
-        return context.toString();
+    /**
+     * 간단한 컨텍스트 구성 - chunk별 구분 없이 하나의 텍스트로 합침
+     */
+    private String buildSimpleContext(List<Map<String, Object>> chunks) {
+        return chunks.stream()
+                .map(chunk -> (String) chunk.get("content"))
+                .collect(Collectors.joining("\n\n"));
     }
 
-    private String generateAnswer(String query, String context) {
+    /**
+     * 간단한 답변 생성
+     */
+    private String generateSimpleAnswer(String query, String context) {
         String prompt = String.format("""
-            다음 문서들의 정보를 바탕으로 사용자의 질문에 답변해주세요.
+            다음 내용을 바탕으로 질문에 간결하게 답변해주세요.
             
             질문: %s
             
-            관련 문서 정보:
+            관련 내용:
             %s
-            
-            답변 지침:
-            1. 제공된 문서 정보만을 기반으로 답변하세요
-            2. 문서에 없는 정보는 추측하지 마세요
-            3. 답변할 수 없는 경우 명확히 표현하세요
-            4. 가능한 한 구체적이고 정확한 답변을 제공하세요
-            5. 여러 문서에서 정보를 찾은 경우, 이를 종합해서 답변하세요
             
             답변:
             """, query, context);
@@ -282,20 +287,17 @@ public class SearchService {
         return chatModel.call(prompt);
     }
 
-    private String generateAnswerForDocument(String query, String context, String fileName) {
+    /**
+     * 특정 문서용 간단한 답변 생성
+     */
+    private String generateSimpleAnswerForDocument(String query, String context, String fileName) {
         String prompt = String.format("""
-            '%s' 문서의 내용을 바탕으로 사용자의 질문에 답변해주세요.
+            '%s' 문서의 다음 내용을 바탕으로 질문에 간결하게 답변해주세요.
             
             질문: %s
             
             문서 내용:
             %s
-            
-            답변 지침:
-            1. 해당 문서의 내용만을 기반으로 답변하세요
-            2. 문서에 없는 정보는 추측하지 마세요
-            3. 답변할 수 없는 경우 명확히 표현하세요
-            4. 가능한 한 구체적이고 정확한 답변을 제공하세요
             
             답변:
             """, fileName, query, context);
@@ -303,28 +305,115 @@ public class SearchService {
         return chatModel.call(prompt);
     }
 
-    private List<SourceInfo> buildSourceInfo(List<Map<String, Object>> chunks) {
-        return chunks.stream()
-                .map(chunk -> SourceInfo.builder()
-                        .documentId((Long) chunk.get("document_id"))
-                        .fileName((String) chunk.get("file_name"))
-                        .chunkIndex((Integer) chunk.get("chunk_index"))
-                        .content(truncateContent((String) chunk.get("content"), 200))
-                        .build())
-                .collect(Collectors.toList());
-    }
-
-    private double calculateConfidence(List<Map<String, Object>> chunks, String answer) {
-        if (chunks.isEmpty() || answer.contains("답변할 수 없습니다") || answer.contains("정보를 찾을 수 없습니다")) {
-            return 0.0;
+    /**
+     * 🆕 주요 참조 문서 객체 반환 - 첨부파일 정보용
+     */
+    private Document getMainDocument(List<Map<String, Object>> chunks, String query) {
+        if (chunks.isEmpty()) {
+            return null;
         }
 
-        double chunkScore = Math.min(chunks.size() / 5.0, 1.0);
-        double answerScore = Math.min(answer.length() / 100.0, 1.0);
+        try {
+            // 가장 유사도가 높은 첫 번째 chunk의 문서 ID로 Document 객체 조회
+            Long documentId = (Long) chunks.get(0).get("document_id");
+            return documentService.getDocument(documentId);
+        } catch (Exception e) {
+            log.error("Error getting main document", e);
+            return null;
+        }
+    }
+    private String getBestMatchingDocumentName(List<Map<String, Object>> chunks, String query) {
+        if (chunks.isEmpty()) {
+            return "알 수 없음";
+        }
 
-        return (chunkScore + answerScore) / 2.0;
+        // 방법 1: 첫 번째 chunk의 문서 (가장 높은 유사도)
+        String firstDocumentName = (String) chunks.get(0).get("file_name");
+
+        // 방법 2: AI에게 어느 문서가 가장 관련성이 높은지 질문
+        try {
+            // 문서별로 그룹화하여 각 문서의 대표 내용 추출
+            Map<String, List<Map<String, Object>>> documentGroups = chunks.stream()
+                    .collect(Collectors.groupingBy(chunk -> (String) chunk.get("file_name")));
+
+            if (documentGroups.size() == 1) {
+                // 문서가 하나뿐이면 그것을 반환
+                return firstDocumentName;
+            }
+
+            // 여러 문서가 있는 경우, AI에게 가장 관련성 높은 문서 선택 요청
+            StringBuilder documentInfo = new StringBuilder();
+            documentGroups.forEach((docName, docChunks) -> {
+                documentInfo.append("문서: ").append(docName).append("\n");
+                documentInfo.append("내용 미리보기: ")
+                        .append(((String) docChunks.get(0).get("content"))
+                                .substring(0, Math.min(200, docChunks.get(0).get("content").toString().length())))
+                        .append("...\n\n");
+            });
+
+            String selectionPrompt = String.format("""
+                다음 질문에 가장 적합한 문서를 선택해주세요. 문서명만 정확히 답변하세요.
+                
+                질문: %s
+                
+                문서들:
+                %s
+                
+                가장 관련성이 높은 문서명:
+                """, query, documentInfo.toString());
+
+            String selectedDoc = chatModel.call(selectionPrompt).trim();
+
+            // AI가 선택한 문서가 실제 목록에 있는지 확인
+            if (documentGroups.containsKey(selectedDoc)) {
+                log.info("AI selected document: {} for query: {}", selectedDoc, query);
+                return selectedDoc;
+            } else {
+                log.warn("AI selected invalid document: {}, falling back to first document: {}",
+                        selectedDoc, firstDocumentName);
+                return firstDocumentName;
+            }
+
+        } catch (Exception e) {
+            log.error("Error in AI document selection, using first document", e);
+            return firstDocumentName;
+        }
     }
 
+    /**
+     * 기존 방식 유지 (백업용) - 가장 많이 나타나는 문서명 반환
+     */
+    private String getMainDocumentName(List<Map<String, Object>> chunks) {
+        Map<String, Long> documentCounts = chunks.stream()
+                .collect(Collectors.groupingBy(
+                        chunk -> (String) chunk.get("file_name"),
+                        Collectors.counting()
+                ));
+
+        return documentCounts.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse("알 수 없음");
+    }
+
+    /**
+     * 간단한 신뢰도 계산 - 퍼센트로 반환 (0~100)
+     */
+    private int calculateSimpleConfidence(List<Map<String, Object>> chunks, String answer) {
+        if (chunks.isEmpty() || answer.contains("답변할 수 없습니다") || answer.contains("정보를 찾을 수 없습니다")) {
+            return 0;
+        }
+
+        // chunks 개수와 답변 길이를 기반으로 간단한 신뢰도 계산
+        double chunkScore = Math.min(chunks.size() / 3.0, 1.0);
+        double answerScore = Math.min(answer.length() / 50.0, 1.0);
+
+        // 0~100 사이의 정수로 변환
+        double confidenceRatio = (chunkScore + answerScore) / 2.0;
+        return (int) Math.round(confidenceRatio * 100);
+    }
+
+    // 기존 유틸리티 메서드들
     private Map<String, Object> mapVectorStoreToResult(VectorStore vs) {
         Map<String, Object> result = new HashMap<>();
         result.put("content", vs.getContent());
@@ -333,13 +422,6 @@ public class SearchService {
         result.put("file_name", vs.getDocument().getFileName());
         result.put("chunk_index", vs.getChunkIndex());
         return result;
-    }
-
-    private String truncateContent(String content, int maxLength) {
-        if (content == null || content.length() <= maxLength) {
-            return content;
-        }
-        return content.substring(0, maxLength) + "...";
     }
 
     private String convertEmbeddingToString(List<Double> embedding) {
